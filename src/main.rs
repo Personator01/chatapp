@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 
 static UP_ADDR: Mutex<String> = Mutex::new(String::new());
+const PORT: u16 = 24542;
 
 
 #[tokio::main]
@@ -23,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/main.css", get(css))
         .route("/api", post(in_prompt));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", PORT)).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 
     Ok(())
@@ -47,15 +48,15 @@ fn extract_messages(payload: Value) -> Result<Vec<(String, String)>, String> {
         Value::Array(a) => {
             a.iter().map(|v| match v {
                 Value::Object(o) => {
-                    match (o["body"].clone(), o["role"].clone()) {
-                        (Value::String(b), Value::String(r)) => {
+                    match (o.get("content"), o.get("role")) {
+                        (Some(Value::String(b)), Some(Value::String(r))) => {
                             if r == "user" || r == "assistant" || r == "system" {
-                                Ok((b, r))
+                                Ok((b.clone(), r.clone()))
                             } else {
                                 Err(format!("Invalid role {} given", r))
                             }
                         }
-                        _ => Err(format!("Message {:?} does not contain body or role fields", o))
+                        _ => Err(format!("Message {:?} does not contain content or role fields", o))
                     }
                 }
                 _ => Err(format!("Malformed array: {:?} is not an object", v))
@@ -68,9 +69,9 @@ fn extract_messages(payload: Value) -> Result<Vec<(String, String)>, String> {
 async fn handle_prompt(messages: Vec<(String, String)>) -> Result<Response, InternalError> {
     fn to_message(message: &(String, String)) -> Value {
         match message {
-            (body, role) => json!({
+            (content, role) => json!({
                 "role": role,
-                "content": body,
+                "content": content,
             })
         }
     }
@@ -82,20 +83,25 @@ async fn handle_prompt(messages: Vec<(String, String)>) -> Result<Response, Inte
     });
     let addr = UP_ADDR.lock().unwrap().clone();
     let client = reqwest::Client::new();
-    let resp_str = client.post(format!("{addr}/api/chat"))
+    println!("http://{}/api/chat", addr);
+    let resp_str = client.post(format!("http://{}/api/chat", addr))
         .json(&req_json)
         .send()
         .await.map_err(|e| anyhow!("Error interfacing with upstream server, {:?}", e))?
         .text().await.map_err(|e| anyhow!("Error acquiring response from upstream server, {:?}", e))?;
         
     let resp_json: Value = serde_json::from_str(resp_str.as_str()).map_err(|e| anyhow!("Could not interpret upstream response, {:?}", e))?;
-    match (&resp_json["message"]["role"], &resp_json["message"]["content"]) {
-        (Value::String(role), Value::String(content)) => Ok(
-            Json(json!({
-                "role": role,
-                "content": content,
-            })).into_response()
-        ),
+    match (resp_json.get("message")) {
+        Some(o) => 
+            match (o.get("role"), o.get("content")) {
+                (Some(Value::String(role)), Some(Value::String(content))) => Ok(
+                    Json(json!({
+                        "role": role,
+                        "content": content,
+                    })).into_response()
+                ),
+                _ => Err(InternalError(anyhow!("Received error from upstream: {:?}", resp_json)))
+            }
         _ => Err(InternalError(anyhow!("Received error from upstream: {:?}", resp_json)))
     }
 }
