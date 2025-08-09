@@ -194,11 +194,11 @@
   .flex {
     display: flex;
   }
-  .h-full {
-    height: 100%;
+  .h-\[80vh\] {
+    height: 80vh;
   }
-  .h-screen {
-    height: 100vh;
+  .h-\[90vh\] {
+    height: 90vh;
   }
   .w-5\/6 {
     width: calc(5/6 * 100%);
@@ -224,8 +224,8 @@
   .justify-start {
     justify-content: flex-start;
   }
-  .overflow-auto {
-    overflow: auto;
+  .overflow-scroll {
+    overflow: scroll;
   }
   .rounded-full {
     border-radius: calc(infinity * 1px);
@@ -296,6 +296,13 @@ pre {
   white-space: -pre-wrap;
   white-space: -o-pre-wrap;
   word-wrap: break-word;
+}
+#scroller * {
+  overflow-anchor: none;
+}
+#anchor {
+  overflow-anchor: auto;
+  height: 1px;
 }
 @property --tw-border-style {
   syntax: "*";

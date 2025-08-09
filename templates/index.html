@@ -111,6 +111,7 @@
       const signal =  controller.signal;
       Alpine.store('cb_controller', controller);
       const url = `/api/streaming/${endpoint}`;
+      const area = document.querySelector("#messages-area");
       while (true) {
         if (signal.aborted) {
           return;
@@ -127,6 +128,8 @@
         const resp_body = await response.json();
         console.log(`retr ${JSON.stringify(resp_body)}`);
         Alpine.store('messages_holder').appendlast(resp_body["content"]);
+
+        area.scrollTop = area.scrollHeight;
       }
     }
 
@@ -165,6 +168,8 @@
         Alpine.store('messages_holder').push({"role": "user", "content": new_message});
         await send_messages_stream();
       }
+      const msg_area = document.querySelector("#messages-area");
+      msg_area.scrollTop = msg_area.scrollHeight;
     }
 
     function clear_history() {
@@ -176,13 +181,14 @@
 </head>
 <body>
   <div class="h-[90vh] flex flex-col justify-end container mx-auto pt-20" x-data="{}">
-    <div id="messages-area" class="grow overflow-auto">
+    <div id="messages-area" class="h-[80vh] overflow-scroll">
       <template x-for="message in $store.messages_holder.messages">
         <div class="w-full flex flex-row my-4" :class="message['role'] == 'user' ? 'justify-end' : 'justify-start'">
           <div class="w-5/6 rounded-lg border-2 p-2" :class="message['role'] == 'user' ? 'border-sky-500' : 'border-slate-500'" x-html="$store.mdconv.makeHtml(message['content'])">
           </div>
         </div>
       </template>
+      <div id="anchor"></div>
     </div>
     <div x-show="$store.waiting">
       Waiting for response...
