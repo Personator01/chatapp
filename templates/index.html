@@ -10,7 +10,7 @@
     const LOCAL_MESSAGES_NAME = "messages";
     function load_messages() {
       const local_messages_s = sessionStorage.getItem(LOCAL_MESSAGES_NAME)
-      if (local_messages_s == null) {
+      if (!local_messages_s) {
         sessionStorage.setItem(LOCAL_MESSAGES_NAME, JSON.stringify([]));
       }
       let messages = [];
@@ -38,6 +38,10 @@
         },
         push(m) {
           this.messages.push(m);
+        },
+        appendlast(c) {
+          const current = this.messages[this.messages.length-1].content;
+          this.messages[this.messages.length-1].content = current + c;
         }
       });
       Alpine.store('waiting', false);
@@ -49,7 +53,7 @@
     }
 
 
-    async function send_messages() {
+    async function send_messages_nostream() {
       Alpine.store('waiting', true);
       const url = "/api";
       const response = await fetch(url, {
@@ -74,7 +78,53 @@
       Alpine.store('waiting', false);
     }
 
-    async function push_message() {
+    async function send_messages_stream() {
+      Alpine.store('waiting', true);
+      const url = "/api/streaming";
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(Alpine.store('messages_holder').messages)
+      });
+
+      Alpine.store('messages_holder').push({"role": "assistant", "content": ""});
+
+      try {
+        if (!response.ok) {
+          const resp_body = await response.json();
+          throw new Error(`Status: ${response.status}, message: ${resp_body['error']}`);
+        }
+        const message = await response.json();
+        console.log(`recv ${message}`);
+        retr_all(message["endpoint"]);
+      } catch (error) {
+        console.error(error.message);
+      }
+      Alpine.store('waiting', false);
+    }
+
+    async function retr_all(endpoint) {
+      const url = `/api/streaming/${endpoint}`;
+      while (true) {
+        const response = await fetch(url)
+        if (!response.ok) {
+          const resp_body = await response.json();
+          throw new Error(`Status: ${response.status}, message: ${resp_body['error']}`);
+        }
+        if (response.status === 204) {
+          console.log("done");
+          return;
+        }
+        const resp_body = await response.json();
+        console.log(`retr ${JSON.stringify(resp_body)}`);
+        Alpine.store('messages_holder').appendlast(resp_body["content"]);
+      }
+    }
+
+
+    async function push_message_nostream() {
       console.log("pushing");
       const area = document.querySelector("#prompt-area");
       const new_message = area.value;
@@ -82,7 +132,19 @@
       area.value = "";
       if (new_message.trim() !== "") {
         Alpine.store('messages_holder').push({"role": "user", "content": new_message});
-        await send_messages();
+        await send_messages_nostream();
+      }
+    }
+
+    async function push_message_stream() {
+      console.log("pushing");
+      const area = document.querySelector("#prompt-area");
+      const new_message = area.value;
+      console.log(new_message);
+      area.value = "";
+      if (new_message.trim() !== "") {
+        Alpine.store('messages_holder').push({"role": "user", "content": new_message});
+        await send_messages_stream();
       }
     }
 
@@ -93,8 +155,8 @@
   </script>
 </head>
 <body>
-  <div class="h-screen flex flex-col justify-end container mx-auto pt-20" x-data="{}">
-    <div id="messages-area" class="h-full overflow-auto">
+  <div class="h-[90vh] flex flex-col justify-end container mx-auto pt-20" x-data="{}">
+    <div id="messages-area" class="grow overflow-auto">
       <template x-for="message in $store.messages_holder.messages">
         <div class="w-full flex flex-row my-4" :class="message['role'] == 'user' ? 'justify-end' : 'justify-start'">
           <div class="w-5/6 rounded-lg border-2 p-2" :class="message['role'] == 'user' ? 'border-sky-500' : 'border-slate-500'" x-html="$store.mdconv.makeHtml(message['content'])">
@@ -109,10 +171,10 @@
       <div class="grow">
         <textarea id="prompt-area"
           class="w-full border-2 border-slate-400 rounded-xl p-4"
-          x-on:keyup.enter="push_message()"></textarea>
+          x-on:keyup.enter="push_message_stream()"></textarea>
       </div>
       <div class="bg-sky-500 text-white cursor-pointer rounded-full hover:bg-white-500 hover:border hover:border-sky-500 hover:text-sky-500 p-5"
-        x-on:click="push_message();">
+        x-on:click="push_message_stream();">
         Send
       </div>
     </div>
