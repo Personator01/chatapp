@@ -98,7 +98,8 @@
         }
         const message = await response.json();
         console.log(`recv ${message}`);
-        retr_all(message["endpoint"]);
+        Alpine.store('current_endpoint', message["endpoint"])
+        retr_all(Alpine.store('current_endpoint'));
       } catch (error) {
         console.error(error.message);
       }
@@ -106,9 +107,15 @@
     }
 
     async function retr_all(endpoint) {
+      const controller = new AbortController();
+      const signal =  controller.signal;
+      Alpine.store('cb_controller', controller);
       const url = `/api/streaming/${endpoint}`;
       while (true) {
-        const response = await fetch(url)
+        if (signal.aborted) {
+          return;
+        }
+        const response = await fetch(url, {signal});
         if (!response.ok) {
           const resp_body = await response.json();
           throw new Error(`Status: ${response.status}, message: ${resp_body['error']}`);
@@ -123,6 +130,17 @@
       }
     }
 
+    async function stop_current() {
+      const controller = Alpine.store('cb_controller');
+      if (controller) {
+        controller.abort();
+      }
+      const endpoint = Alpine.store('current_endpoint');
+      const url = `/api/streaming/${endpoint}`;
+      const response = await fetch(url, {
+        method: "DELETE",
+      });
+    }
 
     async function push_message_nostream() {
       console.log("pushing");
@@ -138,6 +156,7 @@
 
     async function push_message_stream() {
       console.log("pushing");
+      stop_current();
       const area = document.querySelector("#prompt-area");
       const new_message = area.value;
       console.log(new_message);
@@ -149,6 +168,7 @@
     }
 
     function clear_history() {
+      stop_current();
       store_messages([]);
       Alpine.store('messages_holder').load_from_loc();
     }
@@ -178,9 +198,15 @@
         Send
       </div>
     </div>
-    <div class="bg-sky-500 text-white cursor-pointer rounded-full hover:bg-white-500 hover:border hover:border-sky-500 hover:text-sky-500 p-5"
-      x-on:click="clear_history();">
-      Clear History
-    </div>
+    <div class="flex flex-row">
+      <div class="bg-sky-500 text-white cursor-pointer rounded-full hover:bg-white-500 hover:border hover:border-sky-500 hover:text-sky-500 p-5"
+        x-on:click="clear_history();">
+        Clear History
+      </div>
+      <div class="bg-sky-500 text-white cursor-pointer rounded-full hover:bg-white-500 hover:border hover:border-sky-500 hover:text-sky-500 p-5"
+        x-on:click="stop_current();">
+        Stop
+      </div>
+    <div>
   </div>
 </body>

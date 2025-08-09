@@ -5,7 +5,7 @@ mod templates;
 use std::{collections::HashMap, env, fs::read_to_string, sync::{Arc, RwLock}, time::Instant};
 
 use anyhow::{anyhow, bail};
-use axum::{extract::{Path, State}, response::{Html, IntoResponse, Response}, routing::{get, post}, Json, Router};
+use axum::{extract::{Path, State}, response::{Html, IntoResponse, Response}, routing::{delete, get, post}, Json, Router};
 use rand::{Rng, SeedableRng};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -35,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api", post(in_nostream))
         .route("/api/streaming", post(in_streaming))
         .route("/api/streaming/{endpoint}", get(in_streampart))
+        .route("/api/streaming/{endpoint}", delete(stopstream))
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", PORT)).await.unwrap();
@@ -75,12 +76,28 @@ async fn in_streampart(State(state): State<Arc<AppState>>, Path(endpoint): Path<
     let mut streams_h = state.message_streams.lock().await;
     match streams_h.get_mut(&endpoint) {
         Some(s) => {
-            match (s.messages.recv().await) {
-                Some(message) => Ok(Json::<serde_json::Value>(message).into_response()),
-                None => Ok(StatusCode::NO_CONTENT.into_response())
+            let mut buf: Vec<Value> = Vec::new();
+            let amount_recv = s.messages.recv_many(&mut buf, 50).await;
+            if amount_recv == 0 {
+                return Ok(StatusCode::NO_CONTENT.into_response());
+            } else {
+                let con_msg: String = buf.iter().map(|v| v.get("content").unwrap_or(&Value::Null).as_str().unwrap_or("QXQ")).collect();
+                println!("send {}", con_msg);
+                return Ok(Json(json!({"content": con_msg})).into_response());
             }
         }
-        None => Err(InternalError(anyhow!("Invalid endpoint {endpoint}"), StatusCode::BAD_REQUEST))
+        None => Err(InternalError(anyhow!("Invalid endpoint {}", endpoint), StatusCode::BAD_REQUEST))
+    }
+}
+
+async fn stopstream(State(state): State<Arc<AppState>>, Path(endpoint): Path<u32>) -> Result<Response, InternalError> {
+    let mut streams_h = state.message_streams.lock().await;
+    if streams_h.contains_key(&endpoint) {
+        streams_h.get(&endpoint).unwrap().task.abort();
+        streams_h.remove_entry(&endpoint);
+        return Ok(StatusCode::OK.into_response());
+    } else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
     }
 }
 
@@ -220,7 +237,6 @@ async fn stream_cb(dest: Sender<Value>, body: Value) {
                 }
                 _ => bail!("Could not interpret {} as message", line)
             }
-            println!("done?");
         }
         println!("done {:?}", resp_reader.next_line().await?);
         return Ok(());
