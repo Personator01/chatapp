@@ -1,8 +1,12 @@
 #![feature(iterator_try_collect)]
+
+mod templates;
+
 use std::{env, fs::read_to_string, sync::Mutex};
 
 use anyhow::{anyhow, bail};
-use axum::{response::{IntoResponse, Response}, routing::{get, post}, Json, Router};
+use askama::Template;
+use axum::{response::{Html, IntoResponse, Response}, routing::{get, post}, Json, Router};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 
@@ -31,15 +35,22 @@ async fn main() -> anyhow::Result<()> {
 }
 
 
-async fn index() -> String {
-    String::from("index")
+async fn index() -> Result<Html<String>, InternalError> {
+    //Ok(Html(templates::IndexTemplate{}.render()?))
+    Ok(Html(read_to_string("templates/index.html")?))
+}
+
+async fn css() -> Result<Response<String>, InternalError> {
+    Ok(Response::builder()
+        .header("Content-Type", "text/css")
+        .body(read_to_string("static/main.css")?)?)
 }
 
 async fn in_prompt(Json(payload): Json<serde_json::Value>) -> Result<Response, InternalError> {
     println!("Recv req {:?}", payload);
     match extract_messages(payload) {
         Ok(messages) => Ok(handle_prompt(messages).await?),
-        Err(s) => Ok((StatusCode::BAD_REQUEST, s).into_response())
+        Err(s) => Err(InternalError(anyhow!(s), StatusCode::BAD_REQUEST))
     }
 }
 
@@ -91,7 +102,7 @@ async fn handle_prompt(messages: Vec<(String, String)>) -> Result<Response, Inte
         .text().await.map_err(|e| anyhow!("Error acquiring response from upstream server, {:?}", e))?;
         
     let resp_json: Value = serde_json::from_str(resp_str.as_str()).map_err(|e| anyhow!("Could not interpret upstream response, {:?}", e))?;
-    match (resp_json.get("message")) {
+    match resp_json.get("message") {
         Some(o) => 
             match (o.get("role"), o.get("content")) {
                 (Some(Value::String(role)), Some(Value::String(content))) => Ok(
@@ -100,22 +111,22 @@ async fn handle_prompt(messages: Vec<(String, String)>) -> Result<Response, Inte
                         "content": content,
                     })).into_response()
                 ),
-                _ => Err(InternalError(anyhow!("Received error from upstream: {:?}", resp_json)))
+                _ => Err(InternalError(anyhow!("Received error from upstream: {:?}", resp_json), StatusCode::INTERNAL_SERVER_ERROR))
             }
-        _ => Err(InternalError(anyhow!("Received error from upstream: {:?}", resp_json)))
+        _ => Err(InternalError(anyhow!("Received error from upstream: {:?}", resp_json), StatusCode::INTERNAL_SERVER_ERROR))
     }
 }
 
 
-async fn css() -> Result<String, StatusCode> {
-    read_to_string("static/main.css").map_err(|_| {StatusCode::INTERNAL_SERVER_ERROR})
-}
-
-struct InternalError(anyhow::Error);
+struct InternalError(anyhow::Error, StatusCode);
 
 impl IntoResponse for InternalError {
     fn into_response(self) -> Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("Something went wrong: {}", self.0)).into_response()
+        match self {
+            InternalError(e, code) => (code, Json(json!({
+                "error": format!("Something went wrong: {}", e)
+                }))).into_response()
+        }
     }
 }
 
@@ -123,6 +134,6 @@ impl<E> From<E> for InternalError
     where E: Into<anyhow::Error>,
 {
     fn from(err: E) -> Self {
-        Self(err.into())
+        Self(err.into(), StatusCode::INTERNAL_SERVER_ERROR)
     }
 }

@@ -1,0 +1,124 @@
+<!doctype html>
+<head>
+  <meta name="viewport" content="width=device-width initial-scale=1">
+  <link rel="stylesheet" href="/main.css">
+  <script src="//unpkg.com/alpinejs" defer></script>
+  <script src="https://unpkg.com/showdown/dist/showdown.min.js"></script>
+  <script>
+    const showdown = window.showdown
+
+    const LOCAL_MESSAGES_NAME = "messages";
+    function load_messages() {
+      const local_messages_s = sessionStorage.getItem(LOCAL_MESSAGES_NAME)
+      if (local_messages_s == null) {
+        sessionStorage.setItem(LOCAL_MESSAGES_NAME, JSON.stringify([]));
+      }
+      let messages = [];
+      try {
+        messages = JSON.parse(local_messages_s);
+      } catch (error) {
+        console.error(`local stored messages invalid, resetting. Error ${error.message}`);
+      }
+      return messages;
+    }
+
+    function store_messages(inmessages) {
+      sessionStorage.setItem(LOCAL_MESSAGES_NAME, JSON.stringify(inmessages));
+    }
+
+
+    document.addEventListener('alpine:init', () => {
+      Alpine.store('messages_holder', {
+        messages: [],
+        load_from_loc() {
+          this.messages = load_messages();
+        },
+        init() {
+          this.load_from_loc();
+        },
+        push(m) {
+          this.messages.push(m);
+        }
+      });
+      Alpine.store('waiting', false);
+      Alpine.store('mdconv', new showdown.Converter());
+    })
+
+    window.onbeforeunload = function () {
+      store_messages(Alpine.store('messages_holder').messages);
+    }
+
+
+    async function send_messages() {
+      Alpine.store('waiting', true);
+      const url = "/api";
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(Alpine.store('messages_holder').messages)
+      });
+
+      try {
+        if (!response.ok) {
+          const resp_body = await response.json();
+          throw new Error(`Status: ${response.status}, message: ${resp_body['error']}`);
+        }
+        const message = await response.json();
+        console.log(`recv ${message}`);
+        Alpine.store('messages_holder').push(message);
+      } catch (error) {
+        console.error(error.message);
+      }
+      Alpine.store('waiting', false);
+    }
+
+    async function push_message() {
+      console.log("pushing");
+      const area = document.querySelector("#prompt-area");
+      const new_message = area.value;
+      console.log(new_message);
+      area.value = "";
+      if (new_message.trim() !== "") {
+        Alpine.store('messages_holder').push({"role": "user", "content": new_message});
+        await send_messages();
+      }
+    }
+
+    function clear_history() {
+      store_messages([]);
+      Alpine.store('messages_holder').load_from_loc();
+    }
+  </script>
+</head>
+<body>
+  <div class="h-screen flex flex-col justify-end container mx-auto pt-20" x-data="{}">
+    <div id="messages-area" class="h-full overflow-auto">
+      <template x-for="message in $store.messages_holder.messages">
+        <div class="w-full flex flex-row my-4" :class="message['role'] == 'user' ? 'justify-end' : 'justify-start'">
+          <div class="w-5/6 rounded-lg border-2 p-2" :class="message['role'] == 'user' ? 'border-sky-500' : 'border-slate-500'" x-html="$store.mdconv.makeHtml(message['content'])">
+          </div>
+        </div>
+      </template>
+    </div>
+    <div x-show="$store.waiting">
+      Waiting for response...
+    </div>
+    <div class="w-full flex flex-row justify-end">
+      <div class="grow">
+        <textarea id="prompt-area"
+          class="w-full border-2 border-slate-400 rounded-xl p-4"
+          x-on:keyup.enter="push_message()"></textarea>
+      </div>
+      <div class="bg-sky-500 text-white cursor-pointer rounded-full hover:bg-white-500 hover:border hover:border-sky-500 hover:text-sky-500 p-5"
+        x-on:click="push_message();">
+        Send
+      </div>
+    </div>
+    <div class="bg-sky-500 text-white cursor-pointer rounded-full hover:bg-white-500 hover:border hover:border-sky-500 hover:text-sky-500 p-5"
+      x-on:click="clear_history();">
+      Clear History
+    </div>
+  </div>
+</body>
